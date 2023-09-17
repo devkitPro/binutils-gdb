@@ -187,6 +187,7 @@ enum option_values
   /* Used by emultempl/elf.em, emultempl/pe.em and emultempl/pep.em.  */
   OPTION_BUILD_ID,
   OPTION_EXCLUDE_LIBS,
+  OPTION_NX_MODULE_NAME,
   /* Used by emulparams/elf32mcore.sh, emultempl/beos.em, emultempl/pe.em
      and emultempl/pep.em.  */
   OPTION_BASE_FILE,

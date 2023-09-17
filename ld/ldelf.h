@@ -20,6 +20,7 @@
 
 extern const char *ldelf_emit_note_gnu_build_id;
 extern const char *ldelf_emit_note_fdo_package_metadata;
+extern const char *ldelf_emit_nx_module_name;
 
 extern void ldelf_finish (void);
 extern void ldelf_after_parse (void);

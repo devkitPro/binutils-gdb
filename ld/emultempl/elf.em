@@ -814,6 +814,7 @@ EOF
 fi
 fragment <<EOF
     {"build-id", optional_argument, NULL, OPTION_BUILD_ID},
+    {"nx-module-name", optional_argument, NULL, OPTION_NX_MODULE_NAME},
     {"package-metadata", optional_argument, NULL, OPTION_PACKAGE_METADATA},
     {"compress-debug-sections", required_argument, NULL, OPTION_COMPRESS_DEBUG},
     {"rosegment", no_argument, NULL, OPTION_ROSEGMENT},
@@ -901,6 +902,18 @@ gld${EMULATION_NAME}_handle_option (int optc)
     case OPTION_NO_ROSEGMENT:
       link_info.one_rosegment = false;
       break;      
+
+    case OPTION_NX_MODULE_NAME:
+      if (ldelf_emit_nx_module_name != NULL)
+        {
+          free ((char *) ldelf_emit_nx_module_name);
+          ldelf_emit_nx_module_name = NULL;
+        }
+      if (optarg == NULL)
+        optarg = "";
+      ldelf_emit_nx_module_name = xstrdup (optarg);
+      break;
+
 EOF
 
 if test x"$GENERATE_SHLIB_SCRIPT" = xyes; then
