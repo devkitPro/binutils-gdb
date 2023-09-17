@@ -458,7 +458,7 @@ PARSE_AND_LIST_LONGOPTS='
   { "no-apply-dynamic-relocs", no_argument, NULL, OPTION_NO_APPLY_DYNAMIC_RELOCS},
 '
 
-PARSE_AND_LIST_OPTIONS='
+PARSE_AND_LIST_OPTIONS=${PARSE_AND_LIST_OPTIONS}'
   fprintf (file, _("  --no-enum-size-warning      Don'\''t warn about objects with incompatible\n"
 		   "                                enum sizes\n"));
   fprintf (file, _("  --no-wchar-size-warning     Don'\''t warn about objects with incompatible\n"

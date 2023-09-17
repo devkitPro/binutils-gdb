@@ -1,4 +1,5 @@
 source_sh ${srcdir}/emulparams/dt-relr.sh
+source_sh ${srcdir}/emulparams/dynamic_undefined_weak.sh
 
 ARCH="aarch64:ilp32"
 MACHINE=

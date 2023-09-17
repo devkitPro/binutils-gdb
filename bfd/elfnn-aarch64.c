@@ -2441,6 +2441,12 @@ enum elf_aarch64_stub_type
   aarch64_stub_erratum_843419_veneer,
 };
 
+/* Is an undefined weak symbol resolved to 0 ? */
+#define UNDEFINED_WEAK_RESOLVED_TO_ZERO(INFO, EH)               \
+  ((EH)->root.root.type == bfd_link_hash_undefweak              \
+   && bfd_link_executable (INFO)                                \
+   && !(INFO)->dynamic_undefined_weak)
+
 struct elf_aarch64_stub_hash_entry
 {
   /* Base hash table entry structure.  */
@@ -6977,11 +6983,13 @@ elfNN_aarch64_relocate_section (bfd *output_bfd,
       Elf_Internal_Sym *sym;
       asection *sec;
       struct elf_link_hash_entry *h;
+      struct elf_aarch64_link_hash_entry *eh;
       bfd_vma relocation;
       bfd_reloc_status_type r;
       arelent bfd_reloc;
       char sym_type;
       bool unresolved_reloc = false;
+      bool resolved_to_zero = false;
       char *error_message = NULL;
 
       r_symndx = ELFNN_R_SYM (rel->r_info);
@@ -7121,6 +7129,10 @@ elfNN_aarch64_relocate_section (bfd *output_bfd,
 					       h, &unresolved_reloc,
 					       save_addend, &addend, sym);
 
+      eh = (struct elf_aarch64_link_hash_entry *) h;
+      resolved_to_zero = (eh != NULL
+                          && UNDEFINED_WEAK_RESOLVED_TO_ZERO (info, eh));
+
       switch (elfNN_aarch64_bfd_reloc_from_type (input_bfd, r_type))
 	{
 	case BFD_RELOC_AARCH64_TLSGD_ADD_LO12_NC:
@@ -7144,7 +7156,7 @@ elfNN_aarch64_relocate_section (bfd *output_bfd,
 	      need_relocs =
 		(!bfd_link_executable (info) || indx != 0) &&
 		(h == NULL
-		 || ELF_ST_VISIBILITY (h->other) == STV_DEFAULT
+		 || (ELF_ST_VISIBILITY (h->other) == STV_DEFAULT && !resolved_to_zero)
 		 || h->root.type != bfd_link_hash_undefweak);
 
 	      BFD_ASSERT (globals->root.srelgot != NULL);
@@ -7239,7 +7251,7 @@ elfNN_aarch64_relocate_section (bfd *output_bfd,
 	      need_relocs =
 		(!bfd_link_executable (info) || indx != 0) &&
 		(h == NULL
-		 || ELF_ST_VISIBILITY (h->other) == STV_DEFAULT
+		 || (ELF_ST_VISIBILITY (h->other) == STV_DEFAULT && !resolved_to_zero)
 		 || h->root.type != bfd_link_hash_undefweak);
 
 	      BFD_ASSERT (globals->root.srelgot != NULL);
@@ -7288,7 +7300,7 @@ elfNN_aarch64_relocate_section (bfd *output_bfd,
 	      bfd_vma off = symbol_tlsdesc_got_offset (input_bfd, h, r_symndx);
 
 	      need_relocs = (h == NULL
-			     || ELF_ST_VISIBILITY (h->other) == STV_DEFAULT
+			     || (ELF_ST_VISIBILITY (h->other) == STV_DEFAULT && !resolved_to_zero)
 			     || h->root.type != bfd_link_hash_undefweak);
 
 	      BFD_ASSERT (globals->root.srelgot != NULL);
@@ -7612,6 +7624,23 @@ need_copy_relocation_p (struct elf_aarch64_link_hash_entry *eh)
     }
 
   return false;
+}
+
+/* Remove undefined weak symbol from the dynamic symbol table if it
+   is resolved to 0.   */
+
+static bool
+elfNN_aarch64_elf_fixup_symbol (struct bfd_link_info *info,
+                             struct elf_link_hash_entry *h)
+{
+  if (h->dynindx != -1
+      && UNDEFINED_WEAK_RESOLVED_TO_ZERO (info, elf_aarch64_hash_entry (h)))
+    {
+      h->dynindx = -1;
+      _bfd_elf_strtab_delref (elf_hash_table (info)->dynstr,
+                              h->dynstr_index);
+    }
+  return true;
 }
 
 /* Adjust a symbol defined by a dynamic object and referenced by a
@@ -8720,6 +8749,7 @@ elfNN_aarch64_allocate_dynrelocs (struct elf_link_hash_entry *h, void *inf)
   struct elf_aarch64_link_hash_table *htab;
   struct elf_aarch64_link_hash_entry *eh;
   struct elf_dyn_relocs *p;
+  bool resolved_to_zero;
 
   /* An example of a bfd_link_hash_indirect symbol is versioned
      symbol. For example: __gxx_personality_v0(bfd_link_hash_indirect)
@@ -8739,6 +8769,10 @@ elfNN_aarch64_allocate_dynrelocs (struct elf_link_hash_entry *h, void *inf)
   info = (struct bfd_link_info *) inf;
   htab = elf_aarch64_hash_table (info);
 
+  eh = (struct elf_aarch64_link_hash_entry *) h;
+  eh->tlsdesc_got_jump_table_offset = (bfd_vma) - 1;
+  resolved_to_zero = UNDEFINED_WEAK_RESOLVED_TO_ZERO (info, eh);
+
   /* Since STT_GNU_IFUNC symbol must go through PLT, we handle it
      here if it is defined and referenced in a non-shared object.  */
   if (h->type == STT_GNU_IFUNC
@@ -8748,7 +8782,7 @@ elfNN_aarch64_allocate_dynrelocs (struct elf_link_hash_entry *h, void *inf)
     {
       /* Make sure this symbol is output as a dynamic symbol.
 	 Undefined weak syms won't yet be marked as dynamic.  */
-      if (h->dynindx == -1 && !h->forced_local
+      if (h->dynindx == -1 && !h->forced_local && !resolved_to_zero
 	  && h->root.type == bfd_link_hash_undefweak)
 	{
 	  if (!bfd_elf_link_record_dynamic_symbol (info, h))
@@ -8782,6 +8816,11 @@ elfNN_aarch64_allocate_dynrelocs (struct elf_link_hash_entry *h, void *inf)
 	     of relaxing into these from the large model PLT entries.  */
 	  s->size += htab->plt_entry_size;
 
+          /* There should be no PLT relocations against resolved undefined
+             weak symbols in the executable.  */
+          if (!resolved_to_zero)
+            {
+
 	  /* We also need to make an entry in the .got.plt section, which
 	     will be placed in the .got section by the linker script.  */
 	  htab->root.sgotplt->size += GOT_ENTRY_SIZE;
@@ -8810,6 +8849,7 @@ elfNN_aarch64_allocate_dynrelocs (struct elf_link_hash_entry *h, void *inf)
 	    htab->variant_pcs = 1;
 
 	}
+	}
       else
 	{
 	  h->plt.offset = (bfd_vma) - 1;
@@ -8822,9 +8862,6 @@ elfNN_aarch64_allocate_dynrelocs (struct elf_link_hash_entry *h, void *inf)
       h->needs_plt = 0;
     }
 
-  eh = (struct elf_aarch64_link_hash_entry *) h;
-  eh->tlsdesc_got_jump_table_offset = (bfd_vma) - 1;
-
   if (h->got.refcount > 0)
     {
       bool dyn;
@@ -8836,7 +8873,7 @@ elfNN_aarch64_allocate_dynrelocs (struct elf_link_hash_entry *h, void *inf)
 
       /* Make sure this symbol is output as a dynamic symbol.
 	 Undefined weak syms won't yet be marked as dynamic.  */
-      if (dyn && h->dynindx == -1 && !h->forced_local
+      if (dyn && h->dynindx == -1 && !h->forced_local && !resolved_to_zero
 	  && h->root.type == bfd_link_hash_undefweak)
 	{
 	  if (!bfd_elf_link_record_dynamic_symbol (info, h))
@@ -8850,7 +8887,7 @@ elfNN_aarch64_allocate_dynrelocs (struct elf_link_hash_entry *h, void *inf)
 	{
 	  h->got.offset = htab->root.sgot->size;
 	  htab->root.sgot->size += GOT_ENTRY_SIZE;
-	  if ((ELF_ST_VISIBILITY (h->other) == STV_DEFAULT
+	  if (((ELF_ST_VISIBILITY (h->other) == STV_DEFAULT && !resolved_to_zero)
 	       || h->root.type != bfd_link_hash_undefweak)
 	      && (bfd_link_pic (info)
 		  || WILL_CALL_FINISH_DYNAMIC_SYMBOL (dyn, 0, h))
@@ -8886,7 +8923,7 @@ elfNN_aarch64_allocate_dynrelocs (struct elf_link_hash_entry *h, void *inf)
 	    }
 
 	  indx = h && h->dynindx != -1 ? h->dynindx : 0;
-	  if ((ELF_ST_VISIBILITY (h->other) == STV_DEFAULT
+	  if (((ELF_ST_VISIBILITY (h->other) == STV_DEFAULT && !resolved_to_zero)
 	       || h->root.type != bfd_link_hash_undefweak)
 	      && (!bfd_link_executable (info)
 		  || indx != 0
@@ -8968,7 +9005,7 @@ elfNN_aarch64_allocate_dynrelocs (struct elf_link_hash_entry *h, void *inf)
 	 visibility.  */
       if (h->dyn_relocs != NULL && h->root.type == bfd_link_hash_undefweak)
 	{
-	  if (ELF_ST_VISIBILITY (h->other) != STV_DEFAULT
+	  if (ELF_ST_VISIBILITY (h->other) != STV_DEFAULT || resolved_to_zero
 	      || UNDEFWEAK_NO_DYNAMIC_RELOC (info, h))
 	    h->dyn_relocs = NULL;
 
@@ -8988,7 +9025,9 @@ elfNN_aarch64_allocate_dynrelocs (struct elf_link_hash_entry *h, void *inf)
 	 symbols which turn out to need copy relocs or are not
 	 dynamic.  */
 
-      if (!h->non_got_ref
+      if (!(h->non_got_ref
+           || (h->root.type == bfd_link_hash_undefweak
+               && !resolved_to_zero))
 	  && ((h->def_dynamic
 	       && !h->def_regular)
 	      || (htab->root.dynamic_sections_created
@@ -8999,6 +9038,7 @@ elfNN_aarch64_allocate_dynrelocs (struct elf_link_hash_entry *h, void *inf)
 	     Undefined weak syms won't yet be marked as dynamic.  */
 	  if (h->dynindx == -1
 	      && !h->forced_local
+	      && !resolved_to_zero
 	      && h->root.type == bfd_link_hash_undefweak
 	      && !bfd_elf_link_record_dynamic_symbol (info, h))
 	    return false;
@@ -9954,7 +9994,16 @@ elfNN_aarch64_finish_dynamic_symbol (bfd *output_bfd,
 				     Elf_Internal_Sym *sym)
 {
   struct elf_aarch64_link_hash_table *htab;
+  struct elf_aarch64_link_hash_entry *eh;
+  bool local_undefweak;
   htab = elf_aarch64_hash_table (info);
+
+  eh = (struct elf_aarch64_link_hash_entry *) h;
+
+  /* We keep PLT/GOT entries without dynamic PLT/GOT relocations for
+     resolved undefined weak symbols in executable so that their
+     references have value 0 at run-time.  */
+  local_undefweak = UNDEFINED_WEAK_RESOLVED_TO_ZERO (info, eh);
 
   if (h->plt.offset != (bfd_vma) - 1)
     {
@@ -9990,7 +10039,7 @@ elfNN_aarch64_finish_dynamic_symbol (bfd *output_bfd,
 	abort ();
 
       elfNN_aarch64_create_small_pltn_entry (h, htab, output_bfd, info);
-      if (!h->def_regular)
+      if (!local_undefweak && !h->def_regular)
 	{
 	  /* Mark the symbol as undefined, rather than as defined in
 	     the .plt section.  */
@@ -10012,7 +10061,8 @@ elfNN_aarch64_finish_dynamic_symbol (bfd *output_bfd,
       && elf_aarch64_hash_entry (h)->got_type == GOT_NORMAL
       /* Undefined weak symbol in static PIE resolves to 0 without
 	 any dynamic relocations.  */
-      && !UNDEFWEAK_NO_DYNAMIC_RELOC (info, h))
+      && !UNDEFWEAK_NO_DYNAMIC_RELOC (info, h)
+      && !local_undefweak)
     {
       Elf_Internal_Rela rela;
       bfd_byte *loc;
@@ -10679,6 +10729,9 @@ const struct elf_size_info elfNN_aarch64_size_info =
 
 #define elf_backend_init_index_section		\
   _bfd_elf_init_2_index_sections
+
+#define elf_backend_fixup_symbol		\
+  elfNN_aarch64_elf_fixup_symbol
 
 #define elf_backend_finish_dynamic_sections	\
   elfNN_aarch64_finish_dynamic_sections
