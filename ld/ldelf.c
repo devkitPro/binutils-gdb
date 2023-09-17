@@ -55,6 +55,9 @@ const char *ldelf_emit_note_gnu_build_id;
 /* Content of .note.package section.  */
 const char *ldelf_emit_note_fdo_package_metadata;
 
+/* NX module name. */
+const char *ldelf_emit_nx_module_name;
+
 /* These variables are required to pass information back and forth
    between after_open and check_needed and stat_needed and vercheck.  */
 
@@ -1213,8 +1216,93 @@ ldelf_handle_dt_needed (struct elf_link_hash_table *htab,
   *save_input_bfd_tail = NULL;
 }
 
-/* This is called before calling plugin 'all symbols read' hook.  */
+static bool
+write_nx_module_name (bfd *abfd)
+{
+  struct elf_obj_tdata *t = elf_tdata (abfd);
+  const char *name;
+  asection *asec;
+  Elf_Internal_Shdr *i_shdr;
+  unsigned char *contents;
+  bfd_size_type size;
+  file_ptr position;
 
+  name = t->o->nx_module_name.name;
+  asec = t->o->nx_module_name.sec;
+  if (bfd_is_abs_section (asec->output_section))
+    {
+      einfo (_("%P: warning: .nx-module-name section discarded,"
+	       " --build-id ignored\n"));
+      return true;
+    }
+  i_shdr = &elf_section_data (asec->output_section)->this_hdr;
+
+  if (i_shdr->contents == NULL)
+    {
+      if (asec->contents == NULL)
+	asec->contents = (unsigned char *) xmalloc (asec->size);
+      contents = asec->contents;
+    }
+  else
+    contents = i_shdr->contents + asec->output_offset;
+
+  size = asec->size;
+  bfd_h_put_32 (abfd, 0, &contents[0]);
+  bfd_h_put_32 (abfd, size - 9, &contents[4]);
+  memcpy (&contents[8], name, size - 9);
+  contents[size - 1] = 0; /* ensure null termination for AMS */
+
+  position = i_shdr->sh_offset + asec->output_offset;
+
+  return (bfd_seek (abfd, position, SEEK_SET) == 0
+	  && bfd_write (contents, size, abfd) == size);
+}
+
+/* Make .nx-module-name section, and set up elf_tdata->nx_module_name.  */
+
+static bool
+setup_nx_module_name (bfd *ibfd, bfd *obfd)
+{
+  asection *s;
+  bfd_size_type size;
+  flagword flags;
+
+  if (ldelf_emit_nx_module_name[0] == '\0')
+    {
+      /* Extract the basename of the output bfd and use it as the module name. */
+      char *dot_pos;
+      free ((char *) ldelf_emit_nx_module_name);
+      ldelf_emit_nx_module_name = (char *) lbasename (bfd_get_filename (obfd));
+      ldelf_emit_nx_module_name = xstrdup (ldelf_emit_nx_module_name);
+      dot_pos = strrchr (ldelf_emit_nx_module_name, '.');
+      if (dot_pos != NULL)
+        {
+          /* Remove extension. */
+          *dot_pos = 0;
+        }
+    }
+
+  size = 8 + strlen(ldelf_emit_nx_module_name) + 1; /* extra null terminator for AMS */
+  flags = (SEC_ALLOC | SEC_LOAD | SEC_IN_MEMORY
+	   | SEC_LINKER_CREATED | SEC_READONLY | SEC_DATA);
+  s = bfd_make_section_with_flags (ibfd, ".nx-module-name", flags);
+  if (s != NULL && bfd_set_section_alignment (s, 4))
+    {
+      struct elf_obj_tdata *t = elf_tdata (link_info.output_bfd);
+      t->o->nx_module_name.after_write_object_contents = &write_nx_module_name;
+      t->o->nx_module_name.name = ldelf_emit_nx_module_name;
+      t->o->nx_module_name.sec = s;
+      elf_section_type (s) = SHT_PROGBITS;
+      s->size = size;
+      return true;
+    }
+
+  einfo (_("%P: warning: cannot create .nx-module-name section,"
+	   " --nx-module-name ignored\n"));
+  return false;
+}
+
+/* This is called before calling plugin 'all symbols read' hook.  */
 void
 ldelf_before_plugin_all_symbols_read (int use_libpath, int native,
 				      int is_linux, int is_freebsd,
@@ -1289,6 +1377,24 @@ ldelf_after_open (int use_libpath, int native, int is_linux, int is_freebsd,
 	  free ((char *) ldelf_emit_note_fdo_package_metadata);
 	  ldelf_emit_note_fdo_package_metadata = NULL;
 	}
+    }
+
+  if (ldelf_emit_nx_module_name != NULL)
+    {
+      /* Find an ELF input.  */
+      for (abfd = link_info.input_bfds;
+        abfd != (bfd *) NULL; abfd = abfd->link.next)
+        if (bfd_get_flavour (abfd) == bfd_target_elf_flavour
+            && bfd_count_sections (abfd) != 0
+            && !((lang_input_statement_type *) abfd->usrdata)->flags.just_syms)
+          break;
+
+      /* If there are no ELF input files do not try to create a .nx-module-name section. */
+      if (abfd == NULL || !setup_nx_module_name (abfd, link_info.output_bfd))
+        {
+          free ((char *) ldelf_emit_nx_module_name);
+          ldelf_emit_nx_module_name = NULL;
+        }
     }
 
   get_elf_backend_data (link_info.output_bfd)->setup_gnu_properties (&link_info);

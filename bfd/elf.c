@@ -7223,6 +7223,14 @@ _bfd_elf_write_object_contents (bfd *abfd)
   if (!bed->s->write_shdrs_and_ehdr (abfd))
     return false;
 
+  /* Write out the NX module name. */
+  if (t->o->nx_module_name.after_write_object_contents != NULL)
+    {
+      failed = !(*t->o->nx_module_name.after_write_object_contents) (abfd);
+      if (failed)
+        return false;
+    }
+
   /* This is last since write_shdrs_and_ehdr can touch i_shdrp[0].  */
   if (t->o->build_id.after_write_object_contents != NULL
       && !(*t->o->build_id.after_write_object_contents) (abfd))
